@@ -196,6 +196,28 @@ class PromotionTests(unittest.TestCase):
             ],
         )
 
+    def test_refuses_malformed_markers_without_editing_the_pull_request(self):
+        self.mixed_history()
+        malformed_bodies = (
+            f"Intro.\n{promotion.BEGIN}\nstale block\nReviewer footer.",
+            f"Intro.\n{promotion.END}\nReviewer footer.",
+            (
+                f"{promotion.BEGIN}\nfirst\n{promotion.END}\n"
+                f"{promotion.BEGIN}\nsecond\n{promotion.END}"
+            ),
+            f"{promotion.END}\n{promotion.BEGIN}",
+        )
+        for body in malformed_bodies:
+            with self.subTest(body=body):
+                api = FakeAPI(number=5, body=body)
+
+                with self.assertRaisesRegex(
+                    promotion.Failure, "malformed promotion markers"
+                ):
+                    self.promote(api)
+
+                self.assertEqual(api.edited, [])
+
     def test_a_current_description_is_left_alone(self):
         self.mixed_history()
         api = FakeAPI(number=5, body="Intro.")

@@ -210,18 +210,17 @@ def promotion_block(head: str, base: str, subjects: str, note: str) -> str:
 
 def replace_block(current: str, block: str) -> str:
     """Swap the marked block in ``current``, or append it when absent."""
-    lines: list[str] = []
-    skip = done = False
-    for line in current.split("\n"):
-        if line == BEGIN:
-            lines.append(block)
-            skip = done = True
-        elif line == END:
-            skip = False
-        elif not skip:
-            lines.append(line)
-    if not done:
+    lines = current.split("\n")
+    begins = [index for index, line in enumerate(lines) if line == BEGIN]
+    ends = [index for index, line in enumerate(lines) if line == END]
+    if not begins and not ends:
         lines.extend(["", block])
+    else:
+        require(
+            len(begins) == 1 and len(ends) == 1 and begins[0] < ends[0],
+            "pull request body has malformed promotion markers",
+        )
+        lines[begins[0] : ends[0] + 1] = [block]
     return captured("\n".join(lines) + "\n")
 
 
