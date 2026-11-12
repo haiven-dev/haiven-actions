@@ -1,0 +1,36 @@
+name: Promotion pull request
+description: >-
+  Open or refresh the one pull request that promotes a source branch into a
+  target branch, listing the commits the target lacks by conventional type.
+
+inputs:
+  token:
+    description: Token with pull-requests write access to the caller repository.
+    required: true
+  source-branch:
+    description: Branch whose commits are promoted (the pull request head).
+    required: true
+  target-branch:
+    description: Branch the commits are promoted into (the pull request base).
+    required: true
+  title:
+    description: Title for a newly opened pull request; an adopted one keeps its own.
+    required: false
+    default: ""
+  note:
+    description: Paragraph placed after the generated commit list.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Open or refresh the promotion pull request
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+        PROMOTION_SOURCE: ${{ inputs.source-branch }}
+        PROMOTION_TARGET: ${{ inputs.target-branch }}
+        PROMOTION_TITLE: ${{ inputs.title }}
+        PROMOTION_NOTE: ${{ inputs.note }}
+      run: python "${{ github.action_path }}/promotion-pr.py"

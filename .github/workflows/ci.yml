@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Actions / ${{ matrix.os }} / Python 3.14
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - name: Report toolchain
+        run: |
+          python --version
+          git --version
+      - name: Run action tests
+        run: python actions/promotion-pr/test-promotion-pr.py -v
+      - name: Exercise the composite action
+        id: smoke
+        continue-on-error: true
+        uses: ./actions/promotion-pr
+        with:
+          token: smoke-test-token
+          source-branch: main
+          target-branch: main
+      - name: Verify the smoke test failed closed
+        if: steps.smoke.outcome != 'failure'
+        shell: bash
+        run: |
+          echo "Expected identical branches to fail before an API request." >&2
+          exit 1
+      - name: Check whitespace
+        run: git diff --check
