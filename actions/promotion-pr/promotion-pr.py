@@ -241,9 +241,13 @@ def promote(
 
     number = api.open_pull_request(head, base)
 
-    if int(git("rev-list", "--count", revisions, cwd=cwd).strip()) == 0:
-        # GitHub marks an open pull request merged once its head is in the base.
-        return f"{base} already contains {head}; nothing to promote."
+    if int(
+        git("rev-list", "--count", "--no-merges", revisions, cwd=cwd).strip()
+    ) == 0:
+        return (
+            f"{head} has no non-merge commits missing from {base}; "
+            "nothing to promote."
+        )
 
     subjects = captured(
         git("log", "--no-merges", "--reverse", "--format=- %s (%h)", revisions, cwd=cwd)

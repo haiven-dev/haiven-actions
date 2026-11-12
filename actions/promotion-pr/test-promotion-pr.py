@@ -146,7 +146,27 @@ class PromotionTests(unittest.TestCase):
 
         message = self.promote(api)
 
-        self.assertEqual(message, "main already contains sdk-dev; nothing to promote.")
+        self.assertEqual(
+            message,
+            "sdk-dev has no non-merge commits missing from main; nothing to promote.",
+        )
+        self.assertEqual((api.created, api.edited), ([], []))
+
+    def test_merge_commit_only_difference_writes_nothing(self):
+        git(self.clone, "checkout", "-q", "main")
+        self.commit("release.txt", "chore: release")
+        git(self.clone, "push", "-q", "origin", "main")
+        git(self.clone, "checkout", "-q", "sdk-dev")
+        git(self.clone, "merge", "-q", "--no-ff", "-m", "Merge main", "main")
+        self.push()
+        api = FakeAPI(number=3, body="kept")
+
+        message = self.promote(api)
+
+        self.assertEqual(
+            message,
+            "sdk-dev has no non-merge commits missing from main; nothing to promote.",
+        )
         self.assertEqual((api.created, api.edited), ([], []))
 
     def test_adopts_a_hand_opened_pull_request_and_keeps_its_text(self):

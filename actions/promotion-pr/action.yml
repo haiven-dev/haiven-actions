@@ -22,10 +22,16 @@ inputs:
     required: false
     default: ""
 
+outputs:
+  diagnostic:
+    description: The action result or refusal message.
+    value: ${{ steps.promote.outputs.diagnostic }}
+
 runs:
   using: composite
   steps:
     - name: Open or refresh the promotion pull request
+      id: promote
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
@@ -33,4 +39,16 @@ runs:
         PROMOTION_TARGET: ${{ inputs.target-branch }}
         PROMOTION_TITLE: ${{ inputs.title }}
         PROMOTION_NOTE: ${{ inputs.note }}
-      run: python "${{ github.action_path }}/promotion-pr.py"
+      run: |
+        diagnostic_file="$(mktemp)"
+        set +e
+        python "${{ github.action_path }}/promotion-pr.py" 2>&1 | tee "$diagnostic_file"
+        status="${PIPESTATUS[0]}"
+        set -e
+        {
+          echo 'diagnostic<<__PROMOTION_PR_DIAGNOSTIC__'
+          cat "$diagnostic_file"
+          echo '__PROMOTION_PR_DIAGNOSTIC__'
+        } >> "$GITHUB_OUTPUT"
+        rm -f "$diagnostic_file"
+        exit "$status"

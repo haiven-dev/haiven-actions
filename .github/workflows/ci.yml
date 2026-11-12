@@ -37,10 +37,20 @@ jobs:
           source-branch: main
           target-branch: main
       - name: Verify the smoke test failed closed
-        if: steps.smoke.outcome != 'failure'
+        if: always()
         shell: bash
+        env:
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          SMOKE_DIAGNOSTIC: ${{ steps.smoke.outputs.diagnostic }}
         run: |
-          echo "Expected identical branches to fail before an API request." >&2
-          exit 1
+          if [[ "$SMOKE_OUTCOME" != "failure" ]]; then
+            echo "Expected identical branches to fail before an API request." >&2
+            exit 1
+          fi
+          if [[ "$SMOKE_DIAGNOSTIC" != *"source and target branches must differ"* ]]; then
+            echo "Composite action failed for an unexpected reason:" >&2
+            printf '%s\n' "$SMOKE_DIAGNOSTIC" >&2
+            exit 1
+          fi
       - name: Check whitespace
         run: git diff --check

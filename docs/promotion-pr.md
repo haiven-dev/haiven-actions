@@ -28,6 +28,15 @@ The caller owns the push triggers, checkout, and token scopes. Run on pushes to
 both branches so the list stays current when either side moves. Pin this public
 action and its dependencies to reviewed full commit SHAs:
 
+Protect the promotion merge method with a branch ruleset on the target branch.
+For a `dev` to `main` promotion, target `main`, require a pull request, and set
+the required merge type to **Merge** only. This prevents squash and rebase on
+`main` without disabling those methods for every branch in the repository.
+Apply the same rule to `dev` when the back-merge into `dev` must also preserve
+commit identity. Do not enable **Require linear history** on either target,
+because linear history rejects merge commits. Keep required reviews, status
+checks, resolved conversations, and any merge queue authoritative.
+
 ```yaml
 name: Promotion PR
 
@@ -35,6 +44,10 @@ on:
   push:
     branches: [sdk-dev, main]
   workflow_dispatch:
+
+concurrency:
+  group: promotion-pr-${{ github.repository }}-sdk-dev-main
+  cancel-in-progress: false
 
 permissions: {}
 
