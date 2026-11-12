@@ -28,6 +28,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 from typing import Any
@@ -40,6 +41,7 @@ BEGIN = "<!-- promotion-pr:begin -->"
 END = "<!-- promotion-pr:end -->"
 # GitHub rejects descriptions over 65536 characters; leave room for the rest.
 MAX_LIST = 50000
+GIT = shutil.which("git")
 
 BREAKING = re.compile(r"^- [a-z]+(\([^)]*\))?!: ")
 FEATURE = re.compile(r"^- feat(\([^)]*\))?: ")
@@ -61,8 +63,9 @@ def captured(text: str) -> str:
 
 
 def git(*args: str, cwd: Path | None = None) -> str:
+    require(GIT is not None, "git executable not found on PATH")
     completed = subprocess.run(
-        ["git", *args],
+        [GIT, *args],
         cwd=cwd,
         check=False,
         capture_output=True,
@@ -79,8 +82,9 @@ def git(*args: str, cwd: Path | None = None) -> str:
 
 def validate_branch(value: str, label: str) -> str:
     require(bool(value), f"{label} is required")
+    require(GIT is not None, "git executable not found on PATH")
     completed = subprocess.run(
-        ["git", "check-ref-format", f"refs/heads/{value}"],
+        [GIT, "check-ref-format", f"refs/heads/{value}"],
         check=False,
         capture_output=True,
     )
