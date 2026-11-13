@@ -1,0 +1,54 @@
+name: Promotion pull request
+description: >-
+  Open or refresh the one pull request that promotes a source branch into a
+  target branch, listing the commits the target lacks by conventional type.
+
+inputs:
+  token:
+    description: Token with pull-requests write access to the caller repository.
+    required: true
+  source-branch:
+    description: Branch whose commits are promoted (the pull request head).
+    required: true
+  target-branch:
+    description: Branch the commits are promoted into (the pull request base).
+    required: true
+  title:
+    description: Title for a newly opened pull request; an adopted one keeps its own.
+    required: false
+    default: ""
+  note:
+    description: Paragraph placed after the generated commit list.
+    required: false
+    default: ""
+
+outputs:
+  diagnostic:
+    description: The action result or refusal message.
+    value: ${{ steps.promote.outputs.diagnostic }}
+
+runs:
+  using: composite
+  steps:
+    - name: Open or refresh the promotion pull request
+      id: promote
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+        PROMOTION_SOURCE: ${{ inputs.source-branch }}
+        PROMOTION_TARGET: ${{ inputs.target-branch }}
+        PROMOTION_TITLE: ${{ inputs.title }}
+        PROMOTION_NOTE: ${{ inputs.note }}
+      run: |
+        diagnostic_file="$(mktemp)"
+        set +e
+        python "${{ github.action_path }}/promotion-pr.py" 2>&1 | tee "$diagnostic_file"
+        status="${PIPESTATUS[0]}"
+        set -e
+        {
+          echo 'diagnostic<<__PROMOTION_PR_DIAGNOSTIC__'
+          cat "$diagnostic_file"
+          echo '__PROMOTION_PR_DIAGNOSTIC__'
+        } >> "$GITHUB_OUTPUT"
+        rm -f "$diagnostic_file"
+        exit "$status"
