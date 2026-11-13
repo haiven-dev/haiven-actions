@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Open or refresh the one pull request that promotes a source branch.
 
-The description lists, by conventional-commit type, every commit the source
-branch carries that the target branch lacks. It is regenerated between two HTML
+The description lists, by conventional-commit type, every non-merge commit the
+source branch carries that the target branch lacks. A source that is ahead only
+by merge commits is promoted when merging it would change the target's files,
+and skipped when it would not. The description is regenerated between two HTML
 comment markers on each run, so text a reviewer writes outside them is kept. An
 open pull request from the source into the target that was opened by hand is
 adopted: the generated block is appended to its description and its title is
@@ -19,7 +21,8 @@ Environment:
 
 The source and target may instead be passed as the two positional arguments.
 Git runs in the current directory, which must be a clone of the repository with
-an ``origin`` remote.
+an ``origin`` remote. Deciding whether merge commits change files uses
+``git merge-tree --write-tree``, which needs git 2.38 or newer.
 """
 
 from __future__ import annotations
@@ -62,9 +65,9 @@ def captured(text: str) -> str:
     return text.rstrip("\n")
 
 
-def git(*args: str, cwd: Path | None = None) -> str:
+def run_git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     require(GIT is not None, "git executable not found on PATH")
-    completed = subprocess.run(
+    return subprocess.run(
         [GIT, *args],
         cwd=cwd,
         check=False,
@@ -72,6 +75,10 @@ def git(*args: str, cwd: Path | None = None) -> str:
         text=True,
         encoding="utf-8",
     )
+
+
+def git(*args: str, cwd: Path | None = None) -> str:
+    completed = run_git(*args, cwd=cwd)
     if completed.returncode != 0:
         raise Failure(
             f"git {' '.join(args)} failed ({completed.returncode}): "
@@ -190,7 +197,12 @@ def grouped(subjects: str) -> str:
 
 def promotion_block(head: str, base: str, subjects: str, note: str) -> str:
     count = sum(1 for line in subjects.split("\n") if line.startswith("- "))
-    listing = grouped(subjects)
+    listing = (
+        grouped(subjects)
+        if count
+        else f"Only merge commits on `{head}` are missing from `{base}`, and"
+        " they change files. See the Files changed tab."
+    )
     if len(listing) > MAX_LIST:
         listing = (
             listing[:MAX_LIST]
@@ -224,6 +236,37 @@ def replace_block(current: str, block: str) -> str:
     return captured("\n".join(lines) + "\n")
 
 
+def has_changes(head: str, base: str, revisions: str, cwd: Path | None) -> bool:
+    """Whether merging the source would bring the target anything new.
+
+    The source has something to promote when it carries a non-merge commit the
+    target lacks, or when merging it into the target would change the target's
+    files, such as after a back-merge that resolved a conflict by hand.
+
+    ``git merge-tree --write-tree`` computes the tree a real merge would
+    produce, with the same handling of several merge bases (a hotfix merged
+    into both branches, or a criss-cross back-merge), and writes no refs or
+    working-tree files. Comparing that tree with the target's tree, rather than
+    the source's tree with one merge base, keeps both later target commits and
+    extra merge bases from looking like a difference. Exit 1 means the merge
+    conflicts, so the source changes lines the target also changed: that is
+    something to promote. Any other failure stops the run.
+    """
+    if int(git("rev-list", "--count", "--no-merges", revisions, cwd=cwd).strip()):
+        return True
+    args = ("merge-tree", "--write-tree", f"origin/{base}", f"origin/{head}")
+    merged = run_git(*args, cwd=cwd)
+    if merged.returncode == 1:
+        return True
+    if merged.returncode != 0:
+        raise Failure(
+            f"git {' '.join(args)} failed ({merged.returncode}): "
+            f"{merged.stderr.strip()} (the action needs git 2.38 or newer)"
+        )
+    tree = merged.stdout.split("\n", 1)[0].strip()
+    return tree != git("rev-parse", f"origin/{base}^{{tree}}", cwd=cwd).strip()
+
+
 def promote(
     api: Any, head: str, base: str, title: str, note: str, cwd: Path | None = None
 ) -> str:
@@ -241,12 +284,10 @@ def promote(
 
     number = api.open_pull_request(head, base)
 
-    if int(
-        git("rev-list", "--count", "--no-merges", revisions, cwd=cwd).strip()
-    ) == 0:
+    if not has_changes(head, base, revisions, cwd):
         return (
-            f"{head} has no non-merge commits missing from {base}; "
-            "nothing to promote."
+            f"{head} has no non-merge commits missing from {base}, and merging it"
+            f" would change no files on {base}; nothing to promote."
         )
 
     subjects = captured(

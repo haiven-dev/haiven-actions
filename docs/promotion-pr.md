@@ -10,23 +10,37 @@ or `main`. Each run:
    (`type!:` or `type(scope)!:`), **Features**, **Bug fixes**, and **Other
    changes** (everything else, including non-conventional subjects);
 3. opens the pull request when none is open, or refreshes the description of the
-   open one.
+   open one, but only when the source has something to promote: a non-merge
+   commit the target lacks, or merge commits that would change the target's
+   files when merged (a conflict resolution, for example).
 
 The generated list sits between `<!-- promotion-pr:begin -->` and
 `<!-- promotion-pr:end -->`. Only that block is regenerated, so text reviewers
 add outside it is kept. An open source-to-target pull request someone opened by
 hand is adopted: the block is appended to its description and its title is left
-alone. When the target already contains the source, the run does nothing. A
-list longer than 50,000 characters is truncated with a pointer to the Commits
-tab, keeping the description under GitHub's limit.
+alone. When the target already contains the source, the run does nothing. It
+also does nothing after a back-merge that leaves the source ahead only by merge
+commits that change no files, so a `main` into `dev` back-merge does not open an
+empty `dev` into `main` pull request. The file check runs
+`git merge-tree --write-tree origin/<target> origin/<source>` and compares the
+tree a real merge would produce with the target's tree. Commits that land on the
+target after the back-merge therefore do not count as a difference, and neither
+does a history with more than one merge base, such as a hotfix branch merged
+into both branches or a criss-cross back-merge. A merge that would conflict
+counts as something to promote. When only file-changing merge commits remain, the
+description says so and points to the Files changed tab. A list longer than
+50,000 characters is truncated with a pointer to the Commits tab, keeping the
+description under GitHub's limit.
 
 The action never versions, tags, or releases anything, and never merges.
 
 ## Caller
 
 The caller owns the push triggers, checkout, and token scopes. Run on pushes to
-both branches so the list stays current when either side moves. Pin this public
-action and its dependencies to reviewed full commit SHAs:
+both branches so the list stays current when either side moves. The file check
+needs git 2.38 or newer, which GitHub-hosted runners provide; with an older git
+it fails the run with an error instead of guessing. Pin this public action and
+its dependencies to reviewed full commit SHAs:
 
 Protect the promotion merge method with a branch ruleset on the target branch.
 For a `dev` to `main` promotion, target `main`, require a pull request, and set

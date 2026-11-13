@@ -16,6 +16,12 @@ promotion = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(promotion)
 
 
+NOTHING_TO_PROMOTE = (
+    "sdk-dev has no non-merge commits missing from main, and merging it would"
+    " change no files on main; nothing to promote."
+)
+
+
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", *args], cwd=repo, check=True, text=True, capture_output=True
@@ -148,26 +154,197 @@ class PromotionTests(unittest.TestCase):
 
         self.assertEqual(
             message,
-            "sdk-dev has no non-merge commits missing from main; nothing to promote.",
+            NOTHING_TO_PROMOTE,
         )
         self.assertEqual((api.created, api.edited), ([], []))
 
-    def test_merge_commit_only_difference_writes_nothing(self):
+    def back_merge(self, *, edit: str = "") -> None:
+        """Land a commit on main, then merge main back into sdk-dev.
+
+        With ``edit``, the merge commit also changes a file, the way a conflict
+        resolution would.
+        """
         git(self.clone, "checkout", "-q", "main")
         self.commit("release.txt", "chore: release")
         git(self.clone, "push", "-q", "origin", "main")
         git(self.clone, "checkout", "-q", "sdk-dev")
-        git(self.clone, "merge", "-q", "--no-ff", "-m", "Merge main", "main")
+        if not edit:
+            git(self.clone, "merge", "-q", "--no-ff", "-m", "Merge main", "main")
+        else:
+            git(self.clone, "merge", "-q", "--no-ff", "--no-commit", "main")
+            (self.clone / "release.txt").write_text(edit, encoding="utf-8")
+            git(self.clone, "add", "release.txt")
+            git(self.clone, "commit", "-qm", "Merge main")
         self.push()
+
+    def test_merge_commit_only_difference_writes_nothing(self):
+        self.back_merge()
+        self.assertEqual(git(self.clone, "rev-list", "--count", "main..sdk-dev"), "1")
         api = FakeAPI(number=3, body="kept")
 
         message = self.promote(api)
 
         self.assertEqual(
             message,
-            "sdk-dev has no non-merge commits missing from main; nothing to promote.",
+            NOTHING_TO_PROMOTE,
         )
         self.assertEqual((api.created, api.edited), ([], []))
+
+    def test_a_no_op_back_merge_opens_nothing(self):
+        self.back_merge()
+        api = FakeAPI()
+
+        message = self.promote(api)
+
+        self.assertEqual(message, NOTHING_TO_PROMOTE)
+        self.assertEqual((api.created, api.edited), ([], []))
+
+    def test_target_commits_after_a_back_merge_are_not_a_difference(self):
+        self.back_merge()
+        git(self.clone, "checkout", "-q", "main")
+        self.commit("later.txt", "fix: patch the release again")
+        git(self.clone, "push", "-q", "origin", "main")
+        git(self.clone, "checkout", "-q", "sdk-dev")
+        api = FakeAPI()
+
+        message = self.promote(api)
+
+        self.assertEqual(message, NOTHING_TO_PROMOTE)
+        self.assertEqual((api.created, api.edited), ([], []))
+
+    def test_a_merge_commit_that_changes_files_is_promoted(self):
+        self.back_merge(edit="resolved by hand\n")
+        api = FakeAPI()
+
+        self.promote(api)
+
+        self.assertEqual(len(api.created), 1)
+        body = api.created[0][3]
+        self.assertIn("0 commit(s) on `sdk-dev` are not on `main` yet.", body)
+        self.assertIn(
+            "Only merge commits on `sdk-dev` are missing from `main`, and they"
+            " change files. See the Files changed tab.",
+            body,
+        )
+        self.assertNotIn("###", body)
+
+    def test_a_merge_commit_that_changes_files_refreshes_an_open_pull_request(
+        self,
+    ):
+        self.back_merge(edit="resolved by hand\n")
+        api = FakeAPI(number=3, body="Opened by hand.")
+
+        message = self.promote(api)
+
+        self.assertEqual(
+            message,
+            "https://github.com/haiven-dev/example/pull/3\n"
+            "Refreshed pull request #3.",
+        )
+        self.assertEqual(api.created, [])
+        self.assertEqual(len(api.edited), 1)
+        self.assertIn("they change files", api.edited[0][1])
+
+    def merge_bases(self) -> int:
+        return len(git(self.clone, "merge-base", "--all", "main", "sdk-dev").split())
+
+    def test_a_hotfix_merged_into_both_branches_opens_nothing(self):
+        git(self.clone, "checkout", "-q", "-b", "hotfix", "main")
+        self.commit("hotfix.txt", "fix: patch the release")
+        git(self.clone, "checkout", "-q", "sdk-dev")
+        self.commit("a.txt", "feat: add the lobby contract")
+        self.push()
+        git(self.clone, "checkout", "-q", "main")
+        git(self.clone, "merge", "-q", "--no-ff", "-m", "Merge sdk-dev", "sdk-dev")
+        git(self.clone, "merge", "-q", "--no-ff", "-m", "Merge hotfix", "hotfix")
+        git(self.clone, "push", "-q", "origin", "main")
+        git(self.clone, "checkout", "-q", "sdk-dev")
+        git(self.clone, "merge", "-q", "--no-ff", "-m", "Merge hotfix", "hotfix")
+        self.push()
+        self.assertEqual(self.merge_bases(), 2)
+        api = FakeAPI(number=3, body="kept")
+
+        message = self.promote(api)
+
+        self.assertEqual(message, NOTHING_TO_PROMOTE)
+        self.assertEqual((api.created, api.edited), ([], []))
+
+    def test_a_criss_cross_no_op_back_merge_opens_nothing(self):
+        self.commit("a.txt", "feat: add the lobby contract")
+        self.push()
+        promoted = git(self.clone, "rev-parse", "sdk-dev")
+        git(self.clone, "checkout", "-q", "main")
+        released = self.commit("release.txt", "chore: release")
+        git(self.clone, "merge", "-q", "--no-ff", "-m", "Merge sdk-dev", promoted)
+        git(self.clone, "push", "-q", "origin", "main")
+        git(self.clone, "checkout", "-q", "sdk-dev")
+        # A back-merge from a stale main that predates the promotion merge.
+        git(self.clone, "merge", "-q", "--no-ff", "-m", "Merge main", released)
+        self.push()
+        self.assertEqual(self.merge_bases(), 2)
+        api = FakeAPI()
+
+        message = self.promote(api)
+
+        self.assertEqual(message, NOTHING_TO_PROMOTE)
+        self.assertEqual((api.created, api.edited), ([], []))
+
+    def test_a_back_merge_edit_that_conflicts_with_the_target_is_promoted(self):
+        self.back_merge(edit="resolved by hand\n")
+        git(self.clone, "checkout", "-q", "main")
+        self.commit("release.txt", "fix: patch the release again")
+        git(self.clone, "push", "-q", "origin", "main")
+        git(self.clone, "checkout", "-q", "sdk-dev")
+        conflict = subprocess.run(
+            ["git", "merge-tree", "--write-tree", "main", "sdk-dev"],
+            cwd=self.clone,
+            capture_output=True,
+        )
+        self.assertEqual(conflict.returncode, 1)
+        api = FakeAPI()
+
+        self.promote(api)
+
+        self.assertEqual(len(api.created), 1)
+        body = api.created[0][3]
+        self.assertIn("0 commit(s) on `sdk-dev` are not on `main` yet.", body)
+        self.assertIn("they change files", body)
+
+    def test_a_merge_tree_failure_fails_loudly_without_writing(self):
+        self.back_merge(edit="resolved by hand\n")
+        api = FakeAPI(number=3, body="kept")
+        real = promotion.run_git
+
+        def old_git(*args, cwd=None):
+            if args[0] == "merge-tree":
+                return subprocess.CompletedProcess(
+                    args, 129, "", "usage: git merge-tree <base-tree> <b1> <b2>\n"
+                )
+            return real(*args, cwd=cwd)
+
+        with mock.patch.object(promotion, "run_git", side_effect=old_git):
+            with self.assertRaisesRegex(
+                promotion.Failure, r"merge-tree .* failed \(129\).*git 2\.38 or newer"
+            ):
+                self.promote(api)
+
+        self.assertEqual((api.created, api.edited), ([], []))
+
+    def test_a_commit_after_a_back_merge_is_promoted(self):
+        self.back_merge()
+        added = self.commit("g.txt", "feat: add the lobby contract")
+        self.push()
+        api = FakeAPI()
+
+        self.promote(api)
+
+        self.assertEqual(len(api.created), 1)
+        body = api.created[0][3]
+        self.assertIn("1 commit(s) on `sdk-dev` are not on `main` yet.", body)
+        self.assertIn(
+            f"### Features\n\n- feat: add the lobby contract ({added})\n", body
+        )
+        self.assertNotIn("Merge main", body)
 
     def test_adopts_a_hand_opened_pull_request_and_keeps_its_text(self):
         shas = self.mixed_history()
