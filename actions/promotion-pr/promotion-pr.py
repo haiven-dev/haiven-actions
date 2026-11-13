@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Open or refresh the one pull request that promotes a source branch.
 
-The description lists, by conventional-commit type, every commit the source
-branch carries that the target branch lacks. It is regenerated between two HTML
-comment markers on each run, so text a reviewer writes outside them is kept. An
-open pull request from the source into the target that was opened by hand is
-adopted: the generated block is appended to its description and its title is
-left alone.
+The description lists, by conventional-commit type, every non-merge commit the
+source branch carries that the target branch lacks. A source that is ahead only
+by merge commits is promoted when those merges changed files, and skipped when
+they did not. The description is regenerated between two HTML comment markers
+on each run, so text a reviewer writes outside them is kept. An open pull
+request from the source into the target that was opened by hand is adopted: the
+generated block is appended to its description and its title is left alone.
 
 Nothing is versioned, tagged or released here.
 
@@ -190,7 +191,12 @@ def grouped(subjects: str) -> str:
 
 def promotion_block(head: str, base: str, subjects: str, note: str) -> str:
     count = sum(1 for line in subjects.split("\n") if line.startswith("- "))
-    listing = grouped(subjects)
+    listing = (
+        grouped(subjects)
+        if count
+        else f"Only merge commits on `{head}` are missing from `{base}`, and"
+        " they change files. See the Files changed tab."
+    )
     if len(listing) > MAX_LIST:
         listing = (
             listing[:MAX_LIST]
@@ -224,6 +230,24 @@ def replace_block(current: str, block: str) -> str:
     return captured("\n".join(lines) + "\n")
 
 
+def has_changes(head: str, base: str, revisions: str, cwd: Path | None) -> bool:
+    """Whether merging the source would bring the target anything new.
+
+    The source has something to promote when it carries a non-merge commit the
+    target lacks, or when its merge commits changed files since it split from
+    the target, such as a back-merge that resolved a conflict. Comparing the
+    source tree with the merge base rather than the target's tip keeps later
+    commits on the target from looking like a difference.
+    """
+    if int(git("rev-list", "--count", "--no-merges", revisions, cwd=cwd).strip()):
+        return True
+    fork = git("merge-base", f"origin/{base}", f"origin/{head}", cwd=cwd).strip()
+    trees = git(
+        "rev-parse", f"{fork}^{{tree}}", f"origin/{head}^{{tree}}", cwd=cwd
+    ).split()
+    return trees[0] != trees[1]
+
+
 def promote(
     api: Any, head: str, base: str, title: str, note: str, cwd: Path | None = None
 ) -> str:
@@ -241,12 +265,10 @@ def promote(
 
     number = api.open_pull_request(head, base)
 
-    if int(
-        git("rev-list", "--count", "--no-merges", revisions, cwd=cwd).strip()
-    ) == 0:
+    if not has_changes(head, base, revisions, cwd):
         return (
-            f"{head} has no non-merge commits missing from {base}; "
-            "nothing to promote."
+            f"{head} has no non-merge commits missing from {base}, and its merge"
+            " commits change no files; nothing to promote."
         )
 
     subjects = captured(
